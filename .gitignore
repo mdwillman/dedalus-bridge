@@ -1,1 +1,28 @@
 .venv/
+.env
+.env.*
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+
+# Logs
+*.log
+
+# macOS system files
+.DS_Store
+
+# Docker artifacts
+*.pid
+*.tar
+*.bak
+
+# VSCode / IDE settings
+.vscode/
+.idea/
