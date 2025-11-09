@@ -1,0 +1,62 @@
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  annotations:
+    run.googleapis.com/ingress: all
+    run.googleapis.com/ingress-status: all
+    run.googleapis.com/urls: '["https://dedalus-bridge-252427323699.us-central1.run.app","https://dedalus-bridge-ps45wyyzwq-uc.a.run.app"]'
+  labels:
+    cloud.googleapis.com/location: us-central1
+  name: dedalus-bridge
+  namespace: '252427323699'
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/maxScale: '20'
+        run.googleapis.com/client-name: gcloud
+        run.googleapis.com/client-version: 546.0.0
+        run.googleapis.com/startup-cpu-boost: 'true'
+      labels:
+        client.knative.dev/nonce: kpwzrnqqwh
+        run.googleapis.com/startupProbeType: Default
+    spec:
+      containerConcurrency: 80
+      containers:
+      - env:
+        - name: ENVIRONMENT
+          value: development
+        - name: DEDALUS_API_KEY
+          valueFrom:
+            secretKeyRef:
+              key: latest
+              name: dedalus-api-key
+        image: us-central1-docker.pkg.dev/dedalus-bridge/dedalus-bridge-repo/dedalus-bridge
+        ports:
+        - containerPort: 8080
+          name: http1
+        resources:
+          limits:
+            cpu: 1000m
+            memory: 512Mi
+        startupProbe:
+          failureThreshold: 1
+          periodSeconds: 240
+          tcpSocket:
+            port: 8080
+          timeoutSeconds: 240
+        volumeMounts:
+        - mountPath: /var/secrets/avalogica
+          name: avalogica-service-account-xoq-tid
+      serviceAccountName: 252427323699-compute@developer.gserviceaccount.com
+      timeoutSeconds: 300
+      volumes:
+      - name: avalogica-service-account-xoq-tid
+        secret:
+          items:
+          - key: latest
+            path: avalogica-service-account.json
+          secretName: avalogica-service-account
+  traffic:
+  - latestRevision: true
+    percent: 100
