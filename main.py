@@ -84,6 +84,10 @@ class WeatherQuery(BaseModel):
     location: Location
     options: Optional[WeatherOptions] = None
 
+# Tech update lane Pydantic model
+class TechUpdateQuery(BaseModel):
+    topic: str  # e.g., "aiProductUpdates", "aiProducts", "newModels", "techResearch", "polEthicsAndSafety", "upcomingEvents"
+
 # AuthedUser model and authentication dependency
 class AuthedUser(BaseModel):
     uid: str
@@ -182,7 +186,27 @@ def build_mcp_weather_call(body: WeatherQuery) -> dict:
             },
         }
 
+
     raise HTTPException(status_code=400, detail=f"Unsupported mode: {body.mode}")
+
+
+# Tech update lane helper
+def build_mcp_tech_update_call(body: TechUpdateQuery) -> dict:
+    """
+    Build a JSON-RPC tools/call payload for the get_tech_update tool
+    exposed by the Avalogica AI News MCP server.
+    """
+    return {
+        "jsonrpc": "2.0",
+        "id": "1",
+        "method": "tools/call",
+        "params": {
+            "name": "get_tech_update",
+            "arguments": {
+                "topic": body.topic,
+            },
+        },
+    }
 
 
 def ensure_ai_news_session() -> str:
@@ -419,6 +443,7 @@ def query_dedalus(
 def root():
     return {"status": "ok", "message": "Dedalus Bridge API is running"}
 
+
 # Weather lane route handler
 @app.post("/weather/query")
 def weather_query(
@@ -445,6 +470,33 @@ def weather_query(
     except Exception as e:
         logger.exception("Unexpected error in /weather/query")
         raise HTTPException(status_code=500, detail=f"Weather query error: {e}")
+
+# Tech update lane route handler
+@app.post("/ai-news/tech-update")
+def tech_update_query(
+    body: TechUpdateQuery,
+    user: AuthedUser = Depends(get_current_user),
+):
+    """
+    Tech update lane: routes requests to the Avalogica AI News MCP on Cloud Run.
+    Requires a Firebase-authenticated user (same as /dedalus/query).
+    """
+    logger.info(
+        f"Handling AI tech update query for uid={user.uid}, email={user.email}, topic={body.topic}"
+    )
+    try:
+        mcp_payload = build_mcp_tech_update_call(body)
+        start_time = time.perf_counter()
+        result = call_ai_news_mcp(mcp_payload)
+        latency = time.perf_counter() - start_time
+        logger.info(f"Tech update MCP call latency = {latency:.3f}s")
+        return result
+    except HTTPException:
+        # Already logged and wrapped
+        raise
+    except Exception as e:
+        logger.exception("Unexpected error in /ai-news/tech-update")
+        raise HTTPException(status_code=500, detail=f"Tech update query error: {e}")
 
 if __name__ == "__main__":
     import uvicorn
