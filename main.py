@@ -1,6 +1,9 @@
 import os
 import logging
 import time
+import threading
+import json
+import httpx
 from typing import Optional, List
 
 from fastapi import FastAPI, HTTPException, Depends, Header
@@ -29,6 +32,18 @@ else:
     # Don't log the key itself, just that it exists and its length
     logger.info("DEDALUS_API_KEY is set; length=%d", len(DEDALUS_API_KEY))
 
+# Load AI_NEWS_MCP_URL from environment variable with logging
+AI_NEWS_MCP_URL = os.getenv("AI_NEWS_MCP_URL")
+
+if not AI_NEWS_MCP_URL:
+    logger.error("AI_NEWS_MCP_URL is NOT set in the environment.")
+    raise RuntimeError("Missing AI_NEWS_MCP_URL environment variable.")
+else:
+    logger.info("AI_NEWS_MCP_URL is set to %s", AI_NEWS_MCP_URL)
+
+AI_NEWS_SESSION_ID: Optional[str] = None
+AI_NEWS_SESSION_LOCK = threading.Lock()
+
 # Initialize the Dedalus client
 dedalus_client = Dedalus(
     api_key=DEDALUS_API_KEY,
@@ -39,7 +54,7 @@ dedalus_client = Dedalus(
 runner = DedalusRunner(dedalus_client)
 
 # Initialize Firebase Admin using Avalogica service account
-FIREBASE_CRED_PATH = "/var/secrets/avalogica/avalogica-service-account.json"
+FIREBASE_CRED_PATH = os.getenv("FIREBASE_CRED_PATH", "/var/secrets/avalogica/avalogica-service-account.json")
 
 try:
     cred = credentials.Certificate(FIREBASE_CRED_PATH)
@@ -54,6 +69,20 @@ class QueryRequest(BaseModel):
     prompt: str
     model: str = "openai/gpt-5-mini"  # default model, can be overridden
     mcp_servers: Optional[List[str]] = None
+
+# Weather lane Pydantic models
+class Location(BaseModel):
+    latitude: float
+    longitude: float
+
+class WeatherOptions(BaseModel):
+    days: Optional[int] = None
+    hours: Optional[int] = None
+
+class WeatherQuery(BaseModel):
+    mode: str  # "daily_forecast" | "hourly_forecast" | "air_quality" | "marine_conditions"
+    location: Location
+    options: Optional[WeatherOptions] = None
 
 # AuthedUser model and authentication dependency
 class AuthedUser(BaseModel):
@@ -82,6 +111,245 @@ async def get_current_user(authorization: str = Header(None)) -> AuthedUser:
         raise HTTPException(status_code=401, detail="Token missing uid claim")
 
     return AuthedUser(uid=uid, email=email)
+
+# Weather lane helpers
+def build_mcp_weather_call(body: WeatherQuery) -> dict:
+    lat = body.location.latitude
+    lon = body.location.longitude
+    opts = body.options or WeatherOptions()
+
+    if body.mode == "daily_forecast":
+        days = opts.days or 3
+        return {
+            "jsonrpc": "2.0",
+            "id": "1",
+            "method": "tools/call",
+            "params": {
+                "name": "get_forecast",
+                "arguments": {
+                    "latitude": lat,
+                    "longitude": lon,
+                    "days": days,
+                },
+            },
+        }
+
+    if body.mode == "hourly_forecast":
+        hours = opts.hours or 24
+        return {
+            "jsonrpc": "2.0",
+            "id": "1",
+            "method": "tools/call",
+            "params": {
+                "name": "get_hourly_forecast",
+                "arguments": {
+                    "latitude": lat,
+                    "longitude": lon,
+                    "hours": hours,
+                },
+            },
+        }
+
+    if body.mode == "air_quality":
+        hours = opts.hours or 24
+        return {
+            "jsonrpc": "2.0",
+            "id": "1",
+            "method": "tools/call",
+            "params": {
+                "name": "get_air_quality",
+                "arguments": {
+                    "latitude": lat,
+                    "longitude": lon,
+                    "hours": hours,
+                },
+            },
+        }
+
+    if body.mode == "marine_conditions":
+        hours = opts.hours or 24
+        return {
+            "jsonrpc": "2.0",
+            "id": "1",
+            "method": "tools/call",
+            "params": {
+                "name": "get_marine_conditions",
+                "arguments": {
+                    "latitude": lat,
+                    "longitude": lon,
+                    "hours": hours,
+                },
+            },
+        }
+
+    raise HTTPException(status_code=400, detail=f"Unsupported mode: {body.mode}")
+
+
+def ensure_ai_news_session() -> str:
+    """Ensure there is an active MCP session and return its session id.
+
+    This sends a one-time JSON-RPC initialize request to the Avalogica AI News
+    MCP server and caches the mcp-session-id response header. Subsequent calls
+    reuse the cached session id.
+    """
+    global AI_NEWS_SESSION_ID
+
+    with AI_NEWS_SESSION_LOCK:
+        if AI_NEWS_SESSION_ID:
+            return AI_NEWS_SESSION_ID
+
+        headers = {
+            "Accept": "application/json, text/event-stream",
+            "Content-Type": "application/json",
+        }
+        init_payload = {
+            "jsonrpc": "2.0",
+            "id": "init-1",
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {
+                    "name": "dedalus-bridge",
+                    "version": "1.0.0",
+                },
+            },
+        }
+
+        try:
+            resp = httpx.post(
+                f"{AI_NEWS_MCP_URL}/mcp",
+                json=init_payload,
+                headers=headers,
+                timeout=30.0,
+            )
+            resp.raise_for_status()
+        except Exception as e:
+            logger.exception("Error initializing AI News MCP session")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to initialize AI News MCP session: {e}",
+            )
+
+        session_id = resp.headers.get("mcp-session-id")
+        if not session_id:
+            logger.error("AI News MCP initialize missing mcp-session-id header")
+            raise HTTPException(
+                status_code=500,
+                detail="AI News MCP initialize failed: missing mcp-session-id header",
+            )
+
+        AI_NEWS_SESSION_ID = session_id
+        logger.info("AI News MCP session initialized successfully")
+        return session_id
+
+
+def call_ai_news_mcp(mcp_payload: dict) -> dict:
+    """
+    Calls the Avalogica AI News MCP server hosted on Cloud Run.
+
+    Ensures the MCP server is initialized (via ensure_ai_news_session) and then
+    sends a single JSON-RPC tools/call request in one HTTP POST, including the
+    Mcp-Session-Id header so the server recognizes the active session.
+    """
+    session_id = ensure_ai_news_session()
+
+    headers = {
+        "Accept": "application/json, text/event-stream",
+        "Content-Type": "application/json",
+        "Mcp-Session-Id": session_id,
+    }
+
+    try:
+        resp = httpx.post(
+            f"{AI_NEWS_MCP_URL}/mcp",
+            json=mcp_payload,
+            headers=headers,
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+
+        content_type = resp.headers.get("content-type", "").lower()
+
+        # If the MCP server is using Server-Sent Events, extract the JSON from data: lines
+        if "text/event-stream" in content_type:
+            raw = resp.text
+            parsed = None
+            for line in raw.splitlines():
+                line = line.strip()
+                if line.startswith("data:"):
+                    json_str = line[len("data:"):].strip()
+                    if json_str:
+                        # Keep the last valid data: block as the final JSON-RPC message
+                        parsed = json.loads(json_str)
+            if parsed is None:
+                logger.error("AI News MCP SSE response did not contain any data: lines")
+                raise HTTPException(
+                    status_code=500,
+                    detail="AI News MCP error: invalid SSE payload (no data lines)",
+                )
+            data = parsed
+        else:
+            # Non-SSE: assume plain JSON
+            try:
+                data = resp.json()
+            except ValueError as e:
+                logger.exception("Failed to parse AI News MCP JSON response")
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Avalogica AI News MCP error: {e}",
+                )
+
+        # Prefer a single JSON-RPC response object, but handle a batch defensively
+        if isinstance(data, dict):
+            if "error" in data:
+                logger.error("AI News MCP tools/call error: %s", data["error"])
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"AI News MCP tools/call error: {data['error']}",
+                )
+            if "result" in data:
+                return data["result"]
+            return data
+
+        if isinstance(data, list):
+            target_id = mcp_payload.get("id")
+            if target_id is not None:
+                for item in data:
+                    if isinstance(item, dict) and item.get("id") == target_id:
+                        if "error" in item:
+                            logger.error("AI News MCP tools/call error: %s", item["error"])
+                            raise HTTPException(
+                                status_code=500,
+                                detail=f"AI News MCP tools/call error: {item['error']}",
+                            )
+                        if "result" in item:
+                            return item["result"]
+                        return item
+            # Fallback: return the last element in the batch
+            last = data[-1]
+            if isinstance(last, dict) and "error" in last:
+                logger.error("AI News MCP tools/call error: %s", last["error"])
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"AI News MCP tools/call error: {last['error']}",
+                )
+            if isinstance(last, dict) and "result" in last:
+                return last["result"]
+            return last
+
+        # If the response is neither dict nor list, just return it as-is
+        return data
+
+    except HTTPException:
+        # Already wrapped
+        raise
+    except Exception as e:
+        logger.exception("Error while calling Avalogica AI News MCP")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Avalogica AI News MCP error: {e}",
+        )
 
 @app.post("/dedalus/query")
 def query_dedalus(
@@ -150,6 +418,33 @@ def query_dedalus(
 @app.get("/")
 def root():
     return {"status": "ok", "message": "Dedalus Bridge API is running"}
+
+# Weather lane route handler
+@app.post("/weather/query")
+def weather_query(
+    body: WeatherQuery,
+    user: AuthedUser = Depends(get_current_user),
+):
+    """
+    Fast weather lane: routes requests to the Avalogica AI News MCP on Cloud Run.
+    Requires a Firebase-authenticated user (same as /dedalus/query).
+    """
+    logger.info(
+        f"Handling weather query for uid={user.uid}, email={user.email}, mode={body.mode}"
+    )
+    try:
+        mcp_payload = build_mcp_weather_call(body)
+        start_time = time.perf_counter()
+        result = call_ai_news_mcp(mcp_payload)
+        latency = time.perf_counter() - start_time
+        logger.info(f"Weather MCP call latency = {latency:.3f}s")
+        return result
+    except HTTPException:
+        # Already logged and wrapped
+        raise
+    except Exception as e:
+        logger.exception("Unexpected error in /weather/query")
+        raise HTTPException(status_code=500, detail=f"Weather query error: {e}")
 
 if __name__ == "__main__":
     import uvicorn
