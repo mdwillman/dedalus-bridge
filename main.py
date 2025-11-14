@@ -67,7 +67,7 @@ except Exception as e:
 # Define request model
 class QueryRequest(BaseModel):
     prompt: str
-    model: str = "openai/gpt-5-mini"  # default model, can be overridden
+    model: str = "openai/gpt-4.1-mini"
     mcp_servers: Optional[List[str]] = None
 
 # Weather lane Pydantic models
@@ -208,6 +208,21 @@ def build_mcp_tech_update_call(body: TechUpdateQuery) -> dict:
         },
     }
 
+# Tech topics listing lane helper
+def build_mcp_list_tech_topics_call() -> dict:
+    """
+    Build a JSON-RPC tools/call payload for the list_tech_topics tool
+    exposed by the Avalogica AI News MCP server.
+    """
+    return {
+        "jsonrpc": "2.0",
+        "id": "1",
+        "method": "tools/call",
+        "params": {
+            "name": "list_tech_topics",
+            "arguments": {},
+        },
+    }
 
 def ensure_ai_news_session() -> str:
     """Ensure there is an active MCP session and return its session id.
@@ -498,6 +513,34 @@ def tech_update_query(
         logger.exception("Unexpected error in /ai-news/tech-update")
         raise HTTPException(status_code=500, detail=f"Tech update query error: {e}")
 
+# Tech topics listing lane route handler
+@app.get("/ai-news/topics")
+def list_tech_topics(
+    user: AuthedUser = Depends(get_current_user),
+):
+    """
+    Tech topics listing lane: routes requests to the Avalogica AI News MCP on Cloud Run.
+    Returns the currently supported AI news topics that can be used with get_tech_update.
+    Requires a Firebase-authenticated user (same as /dedalus/query).
+    """
+    logger.info(
+        f"Handling AI tech topics query for uid={user.uid}, email={user.email}"
+    )
+    try:
+        mcp_payload = build_mcp_list_tech_topics_call()
+        start_time = time.perf_counter()
+        result = call_ai_news_mcp(mcp_payload)
+        latency = time.perf_counter() - start_time
+        logger.info(f"Tech topics MCP call latency = {latency:.3f}s")
+        return result
+    except HTTPException:
+        # Already logged and wrapped
+        raise
+    except Exception as e:
+        logger.exception("Unexpected error in /ai-news/topics")
+        raise HTTPException(status_code=500, detail=f"Tech topics query error: {e}")
+
+
 if __name__ == "__main__":
     import uvicorn
 
@@ -506,3 +549,6 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=int(os.getenv("PORT", 8080))
     )
+
+
+
