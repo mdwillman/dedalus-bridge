@@ -272,7 +272,6 @@ def build_mcp_link_x_account_call(code: str, code_verifier: str) -> dict:
             "arguments": {
                 "code": code,
                 "codeVerifier": code_verifier,
-                # userId no longer needed — Bridge injects header
                 "redirectUri": "",  # Ignored by avalogica-x-mcp now
             },
         },
