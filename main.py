@@ -22,6 +22,8 @@ app = FastAPI(
 # Configure logger
 logger = logging.getLogger("dedalus-bridge")
 
+
+
 # Load API key from environment variable with logging
 DEDALUS_API_KEY = os.getenv("DEDALUS_API_KEY")
 
@@ -32,6 +34,8 @@ else:
     # Don't log the key itself, just that it exists and its length
     logger.info("DEDALUS_API_KEY is set; length=%d", len(DEDALUS_API_KEY))
 
+
+
 # Load AI_NEWS_MCP_URL from environment variable with logging
 AI_NEWS_MCP_URL = os.getenv("AI_NEWS_MCP_URL")
 
@@ -41,8 +45,25 @@ if not AI_NEWS_MCP_URL:
 else:
     logger.info("AI_NEWS_MCP_URL is set to %s", AI_NEWS_MCP_URL)
 
+
+
+# Load X_MCP_URL from environment variable with logging
+X_MCP_URL = os.getenv("X_MCP_URL")
+
+if not X_MCP_URL:
+    logger.error("X_MCP_URL is NOT set in the environment.")
+    raise RuntimeError("Missing X_MCP_URL environment variable.")
+else:
+    logger.info("X_MCP_URL is set to %s", X_MCP_URL)
+
+
+
 AI_NEWS_SESSION_ID: Optional[str] = None
 AI_NEWS_SESSION_LOCK = threading.Lock()
+X_MCP_SESSION_ID: Optional[str] = None
+X_MCP_SESSION_LOCK = threading.Lock()
+
+
 
 # Initialize the Dedalus client
 dedalus_client = Dedalus(
@@ -50,8 +71,10 @@ dedalus_client = Dedalus(
     environment="production",  # use "development" if you're testing
 )
 
+
 # Initialize a DedalusRunner for MCP / tool orchestration
 runner = DedalusRunner(dedalus_client)
+
 
 # Initialize Firebase Admin using Avalogica service account
 FIREBASE_CRED_PATH = os.getenv("FIREBASE_CRED_PATH", "/var/secrets/avalogica/avalogica-service-account.json")
@@ -64,34 +87,42 @@ except Exception as e:
     logger.error(f"Failed to initialize Firebase Admin: {e}")
     raise
 
+
 # Define request model
 class QueryRequest(BaseModel):
     prompt: str
     model: str = "openai/gpt-4.1-mini"
     mcp_servers: Optional[List[str]] = None
 
+
 # Weather lane Pydantic models
 class Location(BaseModel):
     latitude: float
     longitude: float
 
+
 class WeatherOptions(BaseModel):
     days: Optional[int] = None
     hours: Optional[int] = None
+
 
 class WeatherQuery(BaseModel):
     mode: str  # "daily_forecast" | "hourly_forecast" | "air_quality" | "marine_conditions"
     location: Location
     options: Optional[WeatherOptions] = None
 
+
 # Tech update lane Pydantic model
 class TechUpdateQuery(BaseModel):
     topic: str  # e.g., "aiProductUpdates", "aiProducts", "newModels", "techResearch", "polEthicsAndSafety", "upcomingEvents"
+
 
 # AuthedUser model and authentication dependency
 class AuthedUser(BaseModel):
     uid: str
     email: Optional[str] = None
+
+
 
 async def get_current_user(authorization: str = Header(None)) -> AuthedUser:
     if not authorization:
@@ -115,6 +146,8 @@ async def get_current_user(authorization: str = Header(None)) -> AuthedUser:
         raise HTTPException(status_code=401, detail="Token missing uid claim")
 
     return AuthedUser(uid=uid, email=email)
+
+
 
 # Weather lane helpers
 def build_mcp_weather_call(body: WeatherQuery) -> dict:
@@ -190,6 +223,7 @@ def build_mcp_weather_call(body: WeatherQuery) -> dict:
     raise HTTPException(status_code=400, detail=f"Unsupported mode: {body.mode}")
 
 
+
 # Tech update lane helper
 def build_mcp_tech_update_call(body: TechUpdateQuery) -> dict:
     """
@@ -208,6 +242,8 @@ def build_mcp_tech_update_call(body: TechUpdateQuery) -> dict:
         },
     }
 
+
+
 # Tech topics listing lane helper
 def build_mcp_list_tech_topics_call() -> dict:
     """
@@ -223,6 +259,62 @@ def build_mcp_list_tech_topics_call() -> dict:
             "arguments": {},
         },
     }
+
+
+
+def build_mcp_link_x_account_call(code: str, code_verifier: str) -> dict:
+    return {
+        "jsonrpc": "2.0",
+        "id": "1",
+        "method": "tools/call",
+        "params": {
+            "name": "link_x_account",
+            "arguments": {
+                "code": code,
+                "codeVerifier": code_verifier,
+                # userId no longer needed — Bridge injects header
+                "redirectUri": "",  # Ignored by avalogica-x-mcp now
+            },
+        },
+    }
+
+
+def build_mcp_post_to_x_call(text: str) -> dict:
+    return {
+        "jsonrpc": "2.0",
+        "id": "1",
+        "method": "tools/call",
+        "params": {
+            "name": "post_to_x",
+            "arguments": {"text": text},
+        },
+    }
+
+
+def build_mcp_get_recent_posts_call(limit: int = 10) -> dict:
+    return {
+        "jsonrpc": "2.0",
+        "id": "1",
+        "method": "tools/call",
+        "params": {
+            "name": "get_recent_posts",
+            "arguments": {"limit": limit},
+        },
+    }
+
+
+def build_mcp_summarize_post_history_call(limit: int = 20) -> dict:
+    return {
+        "jsonrpc": "2.0",
+        "id": "1",
+        "method": "tools/call",
+        "params": {
+            "name": "summarize_post_history",
+            "arguments": {"limit": limit},
+        },
+    }
+
+
 
 def ensure_ai_news_session() -> str:
     """Ensure there is an active MCP session and return its session id.
@@ -281,6 +373,63 @@ def ensure_ai_news_session() -> str:
         AI_NEWS_SESSION_ID = session_id
         logger.info("AI News MCP session initialized successfully")
         return session_id
+
+
+
+def ensure_x_mcp_session() -> str:
+    """Ensure there is an active MCP session for the Avalogica X MCP server."""
+    global X_MCP_SESSION_ID
+
+    with X_MCP_SESSION_LOCK:
+        if X_MCP_SESSION_ID:
+            return X_MCP_SESSION_ID
+
+        headers = {
+            "Accept": "application/json, text/event-stream",
+            "Content-Type": "application/json",
+        }
+
+        init_payload = {
+            "jsonrpc": "2.0",
+            "id": "init-x-1",
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {
+                    "name": "dedalus-bridge",
+                    "version": "1.0.0",
+                },
+            },
+        }
+
+        try:
+            resp = httpx.post(
+                f"{X_MCP_URL}/mcp",
+                json=init_payload,
+                headers=headers,
+                timeout=30.0,
+            )
+            resp.raise_for_status()
+        except Exception as e:
+            logger.exception("Error initializing Avalogica X MCP session")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to initialize Avalogica X MCP session: {e}",
+            )
+
+        session_id = resp.headers.get("mcp-session-id")
+        if not session_id:
+            logger.error("Avalogica X MCP initialize missing mcp-session-id header")
+            raise HTTPException(
+                status_code=500,
+                detail="Avalogica X MCP initialize failed: missing mcp-session-id header",
+            )
+
+        X_MCP_SESSION_ID = session_id
+        logger.info("Avalogica X MCP session initialized successfully")
+        return session_id
+
 
 
 def call_ai_news_mcp(mcp_payload: dict) -> dict:
@@ -390,6 +539,98 @@ def call_ai_news_mcp(mcp_payload: dict) -> dict:
             detail=f"Avalogica AI News MCP error: {e}",
         )
 
+
+
+def call_x_mcp(mcp_payload: dict, user: AuthedUser) -> dict:
+    """
+    Calls the Avalogica X MCP server hosted on Cloud Run.
+    Injects the authenticated Dedalus user ID as X-Dedalus-User-Id.
+    """
+    session_id = ensure_x_mcp_session()
+
+    headers = {
+        "Accept": "application/json, text/event-stream",
+        "Content-Type": "application/json",
+        "Mcp-Session-Id": session_id,
+        "X-Dedalus-User-Id": user.uid,
+    }
+
+    try:
+        resp = httpx.post(
+            f"{X_MCP_URL}/mcp",
+            json=mcp_payload,
+            headers=headers,
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+
+        content_type = resp.headers.get("content-type", "").lower()
+
+        if "text/event-stream" in content_type:
+            raw = resp.text
+            parsed = None
+            for line in raw.splitlines():
+                line = line.strip()
+                if line.startswith("data:"):
+                    json_str = line[len("data:"):].strip()
+                    if json_str:
+                        parsed = json.loads(json_str)
+            if parsed is None:
+                logger.error("X MCP SSE response missing data: lines")
+                raise HTTPException(
+                    status_code=500,
+                    detail="Avalogica X MCP error: invalid SSE payload (no data lines)",
+                )
+            data = parsed
+        else:
+            try:
+                data = resp.json()
+            except ValueError as e:
+                logger.exception("Failed to parse X MCP JSON response")
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Avalogica X MCP error: {e}",
+                )
+
+        if isinstance(data, dict):
+            if "error" in data:
+                logger.error("X MCP tools/call error: %s", data["error"])
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Avalogica X MCP tools/call error: {data['error']}",
+                )
+            if "result" in data:
+                return data["result"]
+            return data
+
+        if isinstance(data, list):
+            target_id = mcp_payload.get("id")
+            for item in data:
+                if isinstance(item, dict) and item.get("id") == target_id:
+                    if "error" in item:
+                        logger.error("X MCP tools/call error: %s", item["error"])
+                        raise HTTPException(
+                            status_code=500,
+                            detail=f"Avalogica X MCP tools/call error: {item['error']}",
+                        )
+                    if "result" in item:
+                        return item["result"]
+                    return item
+            return data[-1]
+
+        return data
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error while calling Avalogica X MCP")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Avalogica X MCP error: {e}",
+        )
+
+
+
 @app.post("/dedalus/query")
 def query_dedalus(
     req: QueryRequest,
@@ -453,10 +694,14 @@ def query_dedalus(
         logger.exception("Error while calling Dedalus")
         raise HTTPException(status_code=500, detail=f"Dedalus API error: {e}")
 
+
+
 # Root route (simple health check)
 @app.get("/")
 def root():
     return {"status": "ok", "message": "Dedalus Bridge API is running"}
+
+
 
 
 # Weather lane route handler
@@ -486,6 +731,8 @@ def weather_query(
         logger.exception("Unexpected error in /weather/query")
         raise HTTPException(status_code=500, detail=f"Weather query error: {e}")
 
+
+
 # Tech update lane route handler
 @app.post("/ai-news/tech-update")
 def tech_update_query(
@@ -513,6 +760,8 @@ def tech_update_query(
         logger.exception("Unexpected error in /ai-news/tech-update")
         raise HTTPException(status_code=500, detail=f"Tech update query error: {e}")
 
+
+
 # Tech topics listing lane route handler
 @app.get("/ai-news/topics")
 def list_tech_topics(
@@ -539,6 +788,31 @@ def list_tech_topics(
     except Exception as e:
         logger.exception("Unexpected error in /ai-news/topics")
         raise HTTPException(status_code=500, detail=f"Tech topics query error: {e}")
+
+
+
+@app.post("/x/link")
+def link_x_account(
+    code: str,
+    code_verifier: str,
+    user: AuthedUser = Depends(get_current_user),
+):
+    """
+    Handles X OAuth2 callback finalization via the Avalogica X MCP server.
+    The actual browser callback goes directly to avalogica-x-mcp.
+    This endpoint performs the MCP tool call that finishes linking.
+    """
+    logger.info(f"Linking X account for uid={user.uid}")
+
+    mcp_payload = build_mcp_link_x_account_call(
+        code=code,
+        code_verifier=code_verifier,
+    )
+
+    result = call_x_mcp(mcp_payload, user)
+    return result
+
+
 
 
 if __name__ == "__main__":
