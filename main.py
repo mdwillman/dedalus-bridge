@@ -278,6 +278,25 @@ def build_mcp_link_x_account_call(code: str, code_verifier: str) -> dict:
     }
 
 
+def build_mcp_start_link_x_account_call() -> dict:
+    """
+    Build a JSON-RPC tools/call payload for the start_link_x_account tool
+    exposed by the Avalogica X MCP server.
+
+    This tool is expected to return an authorization URL (and any other
+    metadata needed to complete the OAuth2/PKCE flow on the client side).
+    """
+    return {
+        "jsonrpc": "2.0",
+        "id": "1",
+        "method": "tools/call",
+        "params": {
+            "name": "start_link_x_account",
+            "arguments": {},
+        },
+    }
+
+
 def build_mcp_post_to_x_call(text: str) -> dict:
     return {
         "jsonrpc": "2.0",
@@ -788,6 +807,36 @@ def list_tech_topics(
         logger.exception("Unexpected error in /ai-news/topics")
         raise HTTPException(status_code=500, detail=f"Tech topics query error: {e}")
 
+
+@app.post("/x/start-link")
+def start_x_link(
+    user: AuthedUser = Depends(get_current_user),
+):
+    """
+    Starts the X OAuth2 linking flow via the Avalogica X MCP server.
+
+    This calls the start_link_x_account MCP tool, which should return an
+    authorization URL (and optionally any opaque handles the client needs)
+    for the client to open in a browser.
+    """
+    logger.info(f"Starting X link flow for uid={user.uid}")
+
+    try:
+        mcp_payload = build_mcp_start_link_x_account_call()
+        start_time = time.perf_counter()
+        result = call_x_mcp(mcp_payload, user)
+        latency = time.perf_counter() - start_time
+        logger.info(f"X MCP start-link tools/call latency = {latency:.3f}s")
+        return result
+    except HTTPException:
+        # Already wrapped/logged
+        raise
+    except Exception as e:
+        logger.exception("Unexpected error in /x/start-link")
+        raise HTTPException(
+            status_code=500,
+            detail=f"X start-link error: {e}",
+        )
 
 
 @app.post("/x/link")
