@@ -262,7 +262,7 @@ def build_mcp_list_tech_topics_call() -> dict:
 
 
 
-def build_mcp_link_x_account_call(code: str, code_verifier: str) -> dict:
+def build_mcp_link_x_account_call(user_id: str, code: str, code_verifier: str) -> dict:
     return {
         "jsonrpc": "2.0",
         "id": "1",
@@ -270,13 +270,13 @@ def build_mcp_link_x_account_call(code: str, code_verifier: str) -> dict:
         "params": {
             "name": "link_x_account",
             "arguments": {
+                "userId": user_id,
                 "code": code,
                 "codeVerifier": code_verifier,
-                "redirectUri": "",  # Ignored by avalogica-x-mcp now
+                # no redirectUri needed at all now
             },
         },
     }
-
 
 def build_mcp_start_link_x_account_call() -> dict:
     """
@@ -853,13 +853,13 @@ def link_x_account(
     logger.info(f"Linking X account for uid={user.uid}")
 
     mcp_payload = build_mcp_link_x_account_call(
+        user_id=user.uid,          # <-- REQUIRED
         code=code,
         code_verifier=code_verifier,
     )
 
     result = call_x_mcp(mcp_payload, user)
     return result
-
 
 
 
