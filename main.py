@@ -325,7 +325,7 @@ def build_mcp_summarize_post_history_call(
     }
 
 
-def build_mcp_post_to_x_call(user_id: str, text: str) -> dict:
+def build_mcp_post_to_x_call(user_id: str, blurb: str) -> dict:
     """
     Build an MCP tools/call payload for the post_to_x tool.
 
@@ -341,7 +341,7 @@ def build_mcp_post_to_x_call(user_id: str, text: str) -> dict:
             "name": "post_to_x",
             "arguments": {
                 "userId": user_id,
-                "text": text,
+                "blurb": blurb,
             },
         },
     }
