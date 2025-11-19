@@ -6,7 +6,7 @@ import json
 import httpx
 from typing import Optional, List
 
-from fastapi import FastAPI, HTTPException, Depends, Header, Query
+from fastapi import FastAPI, HTTPException, Depends, Header
 from pydantic import BaseModel
 from dedalus_labs import Dedalus, DedalusRunner
 import firebase_admin
@@ -22,6 +22,7 @@ app = FastAPI(
 # Configure logger
 logger = logging.getLogger("dedalus-bridge")
 
+
 # Load API key from environment variable with logging
 DEDALUS_API_KEY = os.getenv("DEDALUS_API_KEY")
 
@@ -32,6 +33,7 @@ else:
     # Don't log the key itself, just that it exists and its length
     logger.info("DEDALUS_API_KEY is set; length=%d", len(DEDALUS_API_KEY))
 
+
 # Load AI_NEWS_MCP_URL from environment variable with logging
 AI_NEWS_MCP_URL = os.getenv("AI_NEWS_MCP_URL")
 
@@ -40,6 +42,7 @@ if not AI_NEWS_MCP_URL:
     raise RuntimeError("Missing AI_NEWS_MCP_URL environment variable.")
 else:
     logger.info("AI_NEWS_MCP_URL is set to %s", AI_NEWS_MCP_URL)
+
 
 # Load X_MCP_URL from environment variable with logging
 X_MCP_URL = os.getenv("X_MCP_URL")
@@ -50,10 +53,12 @@ if not X_MCP_URL:
 else:
     logger.info("X_MCP_URL is set to %s", X_MCP_URL)
 
+
 AI_NEWS_SESSION_ID: Optional[str] = None
 AI_NEWS_SESSION_LOCK = threading.Lock()
 X_MCP_SESSION_ID: Optional[str] = None
 X_MCP_SESSION_LOCK = threading.Lock()
+
 
 # Initialize the Dedalus client
 dedalus_client = Dedalus(
@@ -61,8 +66,10 @@ dedalus_client = Dedalus(
     environment="production",  # use "development" if you're testing
 )
 
+
 # Initialize a DedalusRunner for MCP / tool orchestration
 runner = DedalusRunner(dedalus_client)
+
 
 # Initialize Firebase Admin using Avalogica service account
 FIREBASE_CRED_PATH = os.getenv("FIREBASE_CRED_PATH", "/var/secrets/avalogica/avalogica-service-account.json")
@@ -110,11 +117,6 @@ class AuthedUser(BaseModel):
     uid: str
     email: Optional[str] = None
 
-
-class SummarizeResponse(BaseModel):
-    limit: int
-    post_count: int
-    summary: str
 
 
 async def get_current_user(authorization: str = Header(None)) -> AuthedUser:
@@ -892,50 +894,6 @@ def get_x_recent_posts(
             detail=f"X recent posts error: {e}",
         )
 
-
-@app.get("/x/summarize", response_model=SummarizeResponse)
-async def summarize_post_history(
-    limit: int = Query(20, ge=1, le=100)
-):
-    """
-    Summarize recent post history using up to `limit` posts.
-    """
-    logger.info(f"[summarize_post_history] Request received (limit={limit})")
-    try:
-        try:
-            posts = await dedalus_runner.get_recent_posts(limit=limit)
-        except Exception as e:
-            logger.error(f"[summarize_post_history] Failed to fetch posts: {e}")
-            raise HTTPException(
-                status_code=500,
-                detail="Failed to fetch recent posts from Dedalus."
-            )
-        if not posts:
-            logger.warning("[summarize_post_history] No posts found.")
-            return SummarizeResponse(limit=limit, post_count=0, summary="No posts available to summarize.")
-        try:
-            summary = await dedalus_runner.summarize_posts(posts)
-        except Exception as e:
-            logger.error(f"[summarize_post_history] Summarization failed: {e}")
-            raise HTTPException(
-                status_code=500,
-                detail="Failed to summarize post history."
-            )
-        logger.info(f"[summarize_post_history] Success (post_count={len(posts)})")
-        return SummarizeResponse(
-            limit=limit,
-            post_count=len(posts),
-            summary=summary
-        )
-    except HTTPException:
-        raise  # Allow FastAPI to handle known HTTP exceptions
-    except Exception as e:
-        # Catch any unexpected internal errors
-        logger.exception(f"[summarize_post_history] UNEXPECTED ERROR: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail="Unexpected server error during post summarization."
-        )
 
 
 if __name__ == "__main__":
