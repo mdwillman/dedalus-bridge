@@ -331,7 +331,7 @@ def build_mcp_post_to_x_call(user_id: str, blurb: str) -> dict:
 
     The Avalogica X MCP tool is expected to take:
       - userId: internal Dedalus user id
-      - text:   the post content
+      - blurb:   the post content
     """
     return {
         "jsonrpc": "2.0",
@@ -977,7 +977,7 @@ def post_to_x(
     try:
         mcp_payload = build_mcp_post_to_x_call(
             user_id=user.uid,
-            text=text,
+            blurb=text,
         )
 
         logger.info(
