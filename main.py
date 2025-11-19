@@ -116,6 +116,9 @@ class SummarizeResponse(BaseModel):
     post_count: int
     summary: str
 
+class PostToXRequest(BaseModel):
+    text: str
+
 
 async def get_current_user(authorization: str = Header(None)) -> AuthedUser:
     if not authorization:
@@ -322,14 +325,24 @@ def build_mcp_summarize_post_history_call(
     }
 
 
-def build_mcp_post_to_x_call(text: str) -> dict:
+def build_mcp_post_to_x_call(user_id: str, text: str) -> dict:
+    """
+    Build an MCP tools/call payload for the post_to_x tool.
+
+    The Avalogica X MCP tool is expected to take:
+      - userId: internal Dedalus user id
+      - text:   the post content
+    """
     return {
         "jsonrpc": "2.0",
         "id": "1",
         "method": "tools/call",
         "params": {
             "name": "post_to_x",
-            "arguments": {"text": text},
+            "arguments": {
+                "userId": user_id,
+                "text": text,
+            },
         },
     }
 
@@ -939,6 +952,53 @@ def summarize_post_history(
             detail="Unexpected server error during post summarization.",
         )
 
+
+@app.post("/x/post")
+def post_to_x(
+    body: PostToXRequest,
+    user: AuthedUser = Depends(get_current_user),
+):
+    """
+    Post a new update to X on behalf of the authenticated user.
+    Proxies to Avalogica X MCP post_to_x.
+    """
+    text = (body.text or "").strip()
+
+    if not text:
+        raise HTTPException(status_code=400, detail="Text must not be empty.")
+
+    # Optional: clamp length locally; X MCP / X API will also enforce limits.
+    if len(text) > 1000:
+        raise HTTPException(
+            status_code=400,
+            detail="Text is too long; please shorten your post.",
+        )
+
+    try:
+        mcp_payload = build_mcp_post_to_x_call(
+            user_id=user.uid,
+            text=text,
+        )
+
+        logger.info(
+            "Calling X MCP post_to_x for user %s (len(text)=%d)",
+            user.uid,
+            len(text),
+        )
+
+        result = call_x_mcp(mcp_payload, user)
+        return result
+
+    except HTTPException:
+        # pass through wrapped MCP / auth errors
+        raise
+    except Exception as e:
+        logger.exception("Unexpected error in /x/post")
+        raise HTTPException(
+            status_code=500,
+            detail=f"X post error: {e}",
+        )
+    
 
 if __name__ == "__main__":
     import uvicorn
