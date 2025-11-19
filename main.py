@@ -302,14 +302,22 @@ def build_mcp_get_recent_posts_call(user_id: str, limit: int = 20) -> dict:
     }
 
 
-def build_mcp_summarize_post_history_call(limit: int = 20) -> dict:
+def build_mcp_summarize_post_history_call(
+    user_id: str,
+    limit: int = 20,
+    focus: str = "all",
+) -> dict:
     return {
         "jsonrpc": "2.0",
         "id": "1",
         "method": "tools/call",
         "params": {
             "name": "summarize_post_history",
-            "arguments": {"limit": limit},
+            "arguments": {
+                "userId": user_id,
+                "limit": limit,
+                "focus": focus,
+            },
         },
     }
 
@@ -902,11 +910,15 @@ def summarize_post_history(
     logger.info(f"[summarize_post_history] Request received (limit={safe_limit})")
 
     try:
-        mcp_payload = build_mcp_summarize_post_history_call(limit=safe_limit)
+        mcp_payload = build_mcp_summarize_post_history_call(
+            user_id=user.uid,
+            limit=safe_limit,
+            focus="all",  # or expose as a query param later
+        )
+
         result = call_x_mcp(mcp_payload, user)
 
-        # result here is the JSON-RPC result; unwrap the tool output
-        # assuming shape: { "content": [ { "type": "text", "text": "..." } ] }
+        # result["content"][0]["text"] is the JSON string we returned from the MCP tool
         content = result.get("content", [])
         text = ""
         if content and isinstance(content, list) and content[0].get("type") == "text":
@@ -914,7 +926,7 @@ def summarize_post_history(
 
         return SummarizeResponse(
             limit=safe_limit,
-            post_count=safe_limit,  # or parse from `text` if you encode it there
+            post_count=safe_limit,  # you can parse real count from `text` later
             summary=text or "No summary returned from MCP.",
         )
 
