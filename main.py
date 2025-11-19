@@ -894,47 +894,37 @@ def get_x_recent_posts(
 
 
 @app.get("/x/summarize", response_model=SummarizeResponse)
-async def summarize_post_history(
-    limit: int = Query(20, ge=1, le=100)
+def summarize_post_history(
+    limit: int = Query(20, ge=1, le=100),
+    user: AuthedUser = Depends(get_current_user),
 ):
-    """
-    Summarize recent post history using up to `limit` posts.
-    """
-    logger.info(f"[summarize_post_history] Request received (limit={limit})")
+    safe_limit = max(10, min(limit, 100))
+    logger.info(f"[summarize_post_history] Request received (limit={safe_limit})")
+
     try:
-        try:
-            posts = await dedalus_runner.get_recent_posts(limit=limit)
-        except Exception as e:
-            logger.error(f"[summarize_post_history] Failed to fetch posts: {e}")
-            raise HTTPException(
-                status_code=500,
-                detail="Failed to fetch recent posts from Dedalus."
-            )
-        if not posts:
-            logger.warning("[summarize_post_history] No posts found.")
-            return SummarizeResponse(limit=limit, post_count=0, summary="No posts available to summarize.")
-        try:
-            summary = await dedalus_runner.summarize_posts(posts)
-        except Exception as e:
-            logger.error(f"[summarize_post_history] Summarization failed: {e}")
-            raise HTTPException(
-                status_code=500,
-                detail="Failed to summarize post history."
-            )
-        logger.info(f"[summarize_post_history] Success (post_count={len(posts)})")
+        mcp_payload = build_mcp_summarize_post_history_call(limit=safe_limit)
+        result = call_x_mcp(mcp_payload, user)
+
+        # result here is the JSON-RPC result; unwrap the tool output
+        # assuming shape: { "content": [ { "type": "text", "text": "..." } ] }
+        content = result.get("content", [])
+        text = ""
+        if content and isinstance(content, list) and content[0].get("type") == "text":
+            text = content[0].get("text", "")
+
         return SummarizeResponse(
-            limit=limit,
-            post_count=len(posts),
-            summary=summary
+            limit=safe_limit,
+            post_count=safe_limit,  # or parse from `text` if you encode it there
+            summary=text or "No summary returned from MCP.",
         )
+
     except HTTPException:
-        raise  # Allow FastAPI to handle known HTTP exceptions
+        raise
     except Exception as e:
-        # Catch any unexpected internal errors
-        logger.exception(f"[summarize_post_history] UNEXPECTED ERROR: {e}")
+        logger.exception("[summarize_post_history] UNEXPECTED ERROR: %s", e)
         raise HTTPException(
             status_code=500,
-            detail="Unexpected server error during post summarization."
+            detail="Unexpected server error during post summarization.",
         )
 
 
