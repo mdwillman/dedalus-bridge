@@ -6,6 +6,17 @@ import json
 import httpx
 from typing import Optional, List
 
+from models import (
+    QueryRequest,
+    Location,
+    WeatherOptions,
+    WeatherQuery,
+    TechUpdateQuery,
+    AuthedUser,
+    SummarizeResponse,
+    PostToXRequest,
+)
+
 from fastapi import FastAPI, HTTPException, Depends, Header, Query
 from pydantic import BaseModel
 from dedalus_labs import Dedalus, DedalusRunner
@@ -74,51 +85,6 @@ try:
 except Exception as e:
     logger.error(f"Failed to initialize Firebase Admin: {e}")
     raise
-
-
-# Define request model
-class QueryRequest(BaseModel):
-    prompt: str
-    model: str = "openai/gpt-4.1-mini"
-    mcp_servers: Optional[List[str]] = None
-
-
-# Weather lane Pydantic models
-class Location(BaseModel):
-    latitude: float
-    longitude: float
-
-
-class WeatherOptions(BaseModel):
-    days: Optional[int] = None
-    hours: Optional[int] = None
-
-
-class WeatherQuery(BaseModel):
-    mode: str  # "daily_forecast" | "hourly_forecast" | "air_quality" | "marine_conditions"
-    location: Location
-    options: Optional[WeatherOptions] = None
-
-
-# Tech update lane Pydantic model
-class TechUpdateQuery(BaseModel):
-    topic: str  # e.g., "aiProductUpdates", "aiProducts", "newModels", "techResearch", "polEthicsAndSafety", "upcomingEvents"
-
-
-# AuthedUser model and authentication dependency
-class AuthedUser(BaseModel):
-    uid: str
-    email: Optional[str] = None
-
-
-class SummarizeResponse(BaseModel):
-    limit: int
-    post_count: int
-    summary: str
-
-class PostToXRequest(BaseModel):
-    text: str
-
 
 async def get_current_user(authorization: str = Header(None)) -> AuthedUser:
     if not authorization:
