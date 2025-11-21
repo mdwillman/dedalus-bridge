@@ -5,14 +5,13 @@ import httpx
 import logging
 from typing import Optional
 
-from fastapi import Depends, Header, HTTPException
+from fastapi import Header, HTTPException
 from models import AuthedUser  # and any other models the deps use
 
 from firebase_admin import auth as firebase_auth, credentials
 import firebase_admin
 
 # Environment / config
-DEDALUS_API_KEY = os.getenv("DEDALUS_API_KEY")  # ONLY if your helper functions actually need this
 AI_NEWS_MCP_URL = os.getenv("AI_NEWS_MCP_URL")
 X_MCP_URL = os.getenv("X_MCP_URL")
 

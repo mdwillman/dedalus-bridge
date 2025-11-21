@@ -1,10 +1,6 @@
 import os
 import logging
 import time
-import threading
-import json
-import httpx
-from typing import Optional, List
 
 from models import (
     QueryRequest,
@@ -25,8 +21,7 @@ from deps import (
     call_x_mcp,
 )
 
-from fastapi import FastAPI, HTTPException, Depends, Header, Query
-from pydantic import BaseModel
+from fastapi import FastAPI, HTTPException, Depends, Query
 from dedalus_labs import Dedalus, DedalusRunner
 
 # Initialize FastAPI app
@@ -67,10 +62,6 @@ if not X_MCP_URL:
 else:
     logger.info("X_MCP_URL is set to %s", X_MCP_URL)
 
-AI_NEWS_SESSION_ID: Optional[str] = None
-AI_NEWS_SESSION_LOCK = threading.Lock()
-X_MCP_SESSION_ID: Optional[str] = None
-X_MCP_SESSION_LOCK = threading.Lock()
 
 # Initialize the Dedalus client
 dedalus_client = Dedalus(
