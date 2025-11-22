@@ -233,6 +233,25 @@ def build_mcp_get_recent_posts_call(user_id: str, limit: int = 20) -> dict:
     }
 
 
+def build_mcp_get_following_timeline_call(user_id: str, limit: int = 50) -> dict:
+    """
+    Builds an MCP tools/call payload for get_following_timeline.
+    This fetches the authenticated user's Following timeline from Avalogica X MCP.
+    """
+    return {
+        "jsonrpc": "2.0",
+        "id": "1",
+        "method": "tools/call",
+        "params": {
+            "name": "get_following_timeline",
+            "arguments": {
+                "userId": user_id,
+                "limit": limit,
+            },
+        },
+    }
+
+
 def build_mcp_summarize_post_history_call(
     user_id: str,
     limit: int = 20,
@@ -524,6 +543,45 @@ def get_x_recent_posts(
         raise HTTPException(
             status_code=500,
             detail=f"X recent posts error: {e}",
+        )
+
+
+@app.get("/x/following")
+def get_x_following_timeline(
+    limit: int = 50,
+    user: AuthedUser = Depends(get_current_user),
+):
+    """
+    Fetch the authenticated user's X Following timeline.
+    Proxies to Avalogica X MCP get_following_timeline.
+    """
+    try:
+        # Clamp limit defensively to match MCP / X constraints
+        safe_limit = max(5, min(limit, 100))
+
+        mcp_payload = build_mcp_get_following_timeline_call(
+            user_id=user.uid,
+            limit=safe_limit,
+        )
+
+        logger.info(
+            "Calling X MCP get_following_timeline for user %s (limit=%d)",
+            user.uid,
+            safe_limit,
+        )
+
+        result = call_x_mcp(mcp_payload, user)
+
+        return result
+
+    except HTTPException:
+        # propagate explicit HTTP errors
+        raise
+    except Exception as e:
+        logger.exception("Unexpected error in /x/following")
+        raise HTTPException(
+            status_code=500,
+            detail=f"X Following timeline error: {e}",
         )
 
 
