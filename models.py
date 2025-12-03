@@ -22,8 +22,26 @@ class WeatherQuery(BaseModel):
     options: Optional[WeatherOptions] = None
 
 # Tech update lane Pydantic model
+
 class TechUpdateQuery(BaseModel):
     topic: str  # e.g., "aiProductUpdates", "aiProducts", "newModels", "techResearch", "polEthicsAndSafety", "upcomingEvents"
+
+# Consumer Needs lane Pydantic models
+class EmergentSignalsQuery(BaseModel):
+    query: str
+    num_results: Optional[int] = None
+
+class EdgeCommunitiesQuery(BaseModel):
+    query: str
+    num_results: Optional[int] = None
+
+class SimilarPagesQuery(BaseModel):
+    url: str
+    num_results: Optional[int] = None
+
+class FetchPageContentsQuery(BaseModel):
+    url: str
+    include_subpages: Optional[bool] = False
 
 # AuthedUser model and authentication dependency
 class AuthedUser(BaseModel):

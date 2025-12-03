@@ -11,6 +11,10 @@ from models import (
     AuthedUser,
     SummarizeResponse,
     PostToXRequest,
+    EmergentSignalsQuery,
+    EdgeCommunitiesQuery,
+    SimilarPagesQuery,
+    FetchPageContentsQuery,
 )
 
 from deps import (
@@ -19,10 +23,15 @@ from deps import (
     ensure_x_mcp_session,
     call_ai_news_mcp,
     call_x_mcp,
+    call_consumer_needs_mcp,
 )
 
 from fastapi import FastAPI, HTTPException, Depends, Query
 from dedalus_labs import Dedalus, DedalusRunner
+
+from dotenv import load_dotenv
+load_dotenv()
+
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -31,8 +40,10 @@ app = FastAPI(
     version="1.0.0"
 )
 
+
 # Configure logger
 logger = logging.getLogger("dedalus-bridge")
+
 
 # Load API key from environment variable with logging
 DEDALUS_API_KEY = os.getenv("DEDALUS_API_KEY")
@@ -44,6 +55,7 @@ else:
     # Don't log the key itself, just that it exists and its length
     logger.info("DEDALUS_API_KEY is set; length=%d", len(DEDALUS_API_KEY))
 
+
 # Load AI_NEWS_MCP_URL from environment variable with logging
 AI_NEWS_MCP_URL = os.getenv("AI_NEWS_MCP_URL")
 
@@ -53,6 +65,7 @@ if not AI_NEWS_MCP_URL:
 else:
     logger.info("AI_NEWS_MCP_URL is set to %s", AI_NEWS_MCP_URL)
 
+
 # Load X_MCP_URL from environment variable with logging
 X_MCP_URL = os.getenv("X_MCP_URL")
 
@@ -61,6 +74,16 @@ if not X_MCP_URL:
     raise RuntimeError("Missing X_MCP_URL environment variable.")
 else:
     logger.info("X_MCP_URL is set to %s", X_MCP_URL)
+
+
+# Load CONSUMER_NEEDS_MCP_URL from environment variable with logging
+CONSUMER_NEEDS_MCP_URL = os.getenv("CONSUMER_NEEDS_MCP_URL")
+
+if not CONSUMER_NEEDS_MCP_URL:
+    logger.error("CONSUMER_NEEDS_MCP_URL is NOT set in the environment.")
+    raise RuntimeError("Missing CONSUMER_NEEDS_MCP_URL environment variable.")
+else:
+    logger.info("CONSUMER_NEEDS_MCP_URL is set to %s", CONSUMER_NEEDS_MCP_URL)
 
 
 # Initialize the Dedalus client
@@ -177,6 +200,82 @@ def build_mcp_list_tech_topics_call() -> dict:
         "params": {
             "name": "list_tech_topics",
             "arguments": {},
+        },
+    }
+
+
+def build_mcp_search_emergent_signals_call(body: EmergentSignalsQuery) -> dict:
+    """
+    Build a JSON-RPC tools/call payload for the search_emergent_signals tool
+    exposed by the Avalogica Consumer Needs MCP server.
+    """
+    return {
+        "jsonrpc": "2.0",
+        "id": "1",
+        "method": "tools/call",
+        "params": {
+            "name": "search_emergent_signals",
+            "arguments": {
+                "query": body.query,
+                "numResults": body.num_results,
+            },
+        },
+    }
+
+
+def build_mcp_search_edge_communities_call(body: EdgeCommunitiesQuery) -> dict:
+    """
+    Build a JSON-RPC tools/call payload for the search_edge_communities tool
+    exposed by the Avalogica Consumer Needs MCP server.
+    """
+    return {
+        "jsonrpc": "2.0",
+        "id": "1",
+        "method": "tools/call",
+        "params": {
+            "name": "search_edge_communities",
+            "arguments": {
+                "query": body.query,
+                "numResults": body.num_results,
+            },
+        },
+    }
+
+
+def build_mcp_find_similar_pages_call(body: SimilarPagesQuery) -> dict:
+    """
+    Build a JSON-RPC tools/call payload for the find_similar_pages tool
+    exposed by the Avalogica Consumer Needs MCP server.
+    """
+    return {
+        "jsonrpc": "2.0",
+        "id": "1",
+        "method": "tools/call",
+        "params": {
+            "name": "find_similar_pages",
+            "arguments": {
+                "url": body.url,
+                "numResults": body.num_results,
+            },
+        },
+    }
+
+
+def build_mcp_fetch_page_contents_call(body: FetchPageContentsQuery) -> dict:
+    """
+    Build a JSON-RPC tools/call payload for the fetch_page_contents tool
+    exposed by the Avalogica Consumer Needs MCP server.
+    """
+    return {
+        "jsonrpc": "2.0",
+        "id": "1",
+        "method": "tools/call",
+        "params": {
+            "name": "fetch_page_contents",
+            "arguments": {
+                "url": body.url,
+                "includeSubpages": body.include_subpages,
+            },
         },
     }
 
@@ -394,7 +493,6 @@ def weather_query(
         raise HTTPException(status_code=500, detail=f"Weather query error: {e}")
 
 
-
 # Tech update lane route handler
 @app.post("/ai-news/tech-update")
 def tech_update_query(
@@ -421,7 +519,6 @@ def tech_update_query(
     except Exception as e:
         logger.exception("Unexpected error in /ai-news/tech-update")
         raise HTTPException(status_code=500, detail=f"Tech update query error: {e}")
-
 
 
 # Tech topics listing lane route handler
@@ -451,6 +548,126 @@ def list_tech_topics(
         logger.exception("Unexpected error in /ai-news/topics")
         raise HTTPException(status_code=500, detail=f"Tech topics query error: {e}")
 
+
+@app.post("/consumer-needs/emergent-signals")
+def consumer_needs_emergent_signals(
+    body: EmergentSignalsQuery,
+    user: AuthedUser = Depends(get_current_user),
+):
+    """
+    Search emergent signals via the Avalogica Consumer Needs MCP on Cloud Run.
+    """
+    logger.info(
+        "Handling consumer-needs/emergent-signals for uid=%s, query=%s",
+        user.uid,
+        body.query,
+    )
+    try:
+        mcp_payload = build_mcp_search_emergent_signals_call(body)
+        start_time = time.perf_counter()
+        result = call_consumer_needs_mcp(mcp_payload)
+        latency = time.perf_counter() - start_time
+        logger.info("Consumer Needs emergent_signals MCP latency = %.3fs", latency)
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Unexpected error in /consumer-needs/emergent-signals")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Consumer Needs emergent signals error: {e}",
+        )
+
+
+@app.post("/consumer-needs/edge-communities")
+def consumer_needs_edge_communities(
+    body: EdgeCommunitiesQuery,
+    user: AuthedUser = Depends(get_current_user),
+):
+    """
+    Search edge communities via the Avalogica Consumer Needs MCP on Cloud Run.
+    """
+    logger.info(
+        "Handling consumer-needs/edge-communities for uid=%s, query=%s",
+        user.uid,
+        body.query,
+    )
+    try:
+        mcp_payload = build_mcp_search_edge_communities_call(body)
+        start_time = time.perf_counter()
+        result = call_consumer_needs_mcp(mcp_payload)
+        latency = time.perf_counter() - start_time
+        logger.info("Consumer Needs edge_communities MCP latency = %.3fs", latency)
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Unexpected error in /consumer-needs/edge-communities")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Consumer Needs edge communities error: {e}",
+        )
+
+
+@app.post("/consumer-needs/similar-pages")
+def consumer_needs_similar_pages(
+    body: SimilarPagesQuery,
+    user: AuthedUser = Depends(get_current_user),
+):
+    """
+    Find similar pages via the Avalogica Consumer Needs MCP on Cloud Run.
+    """
+    logger.info(
+        "Handling consumer-needs/similar-pages for uid=%s, url=%s",
+        user.uid,
+        body.url,
+    )
+    try:
+        mcp_payload = build_mcp_find_similar_pages_call(body)
+        start_time = time.perf_counter()
+        result = call_consumer_needs_mcp(mcp_payload)
+        latency = time.perf_counter() - start_time
+        logger.info("Consumer Needs find_similar_pages MCP latency = %.3fs", latency)
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Unexpected error in /consumer-needs/similar-pages")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Consumer Needs similar pages error: {e}",
+        )
+
+
+@app.post("/consumer-needs/page-contents")
+def consumer_needs_page_contents(
+    body: FetchPageContentsQuery,
+    user: AuthedUser = Depends(get_current_user),
+):
+    """
+    Fetch page (and optional subpage) contents via the Avalogica Consumer Needs MCP.
+    """
+    logger.info(
+        "Handling consumer-needs/page-contents for uid=%s, url=%s, include_subpages=%s",
+        user.uid,
+        body.url,
+        body.include_subpages,
+    )
+    try:
+        mcp_payload = build_mcp_fetch_page_contents_call(body)
+        start_time = time.perf_counter()
+        result = call_consumer_needs_mcp(mcp_payload)
+        latency = time.perf_counter() - start_time
+        logger.info("Consumer Needs fetch_page_contents MCP latency = %.3fs", latency)
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Unexpected error in /consumer-needs/page-contents")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Consumer Needs page contents error: {e}",
+        )
 
 
 @app.post("/x/start-link")

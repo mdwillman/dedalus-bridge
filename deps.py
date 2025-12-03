@@ -14,6 +14,7 @@ import firebase_admin
 # Environment / config
 AI_NEWS_MCP_URL = os.getenv("AI_NEWS_MCP_URL")
 X_MCP_URL = os.getenv("X_MCP_URL")
+CONSUMER_NEEDS_MCP_URL = os.getenv("CONSUMER_NEEDS_MCP_URL")
 
 logger = logging.getLogger("dedalus-bridge")
 
@@ -21,6 +22,8 @@ AI_NEWS_SESSION_ID: Optional[str] = None
 AI_NEWS_SESSION_LOCK = threading.Lock()
 X_MCP_SESSION_ID: Optional[str] = None
 X_MCP_SESSION_LOCK = threading.Lock()
+CONSUMER_NEEDS_SESSION_ID: Optional[str] = None
+CONSUMER_NEEDS_SESSION_LOCK = threading.Lock()
 
 # Initialize Firebase Admin using Avalogica service account
 FIREBASE_CRED_PATH = os.getenv("FIREBASE_CRED_PATH", "/var/secrets/avalogica/avalogica-service-account.json")
@@ -169,6 +172,61 @@ def ensure_x_mcp_session() -> str:
 
         X_MCP_SESSION_ID = session_id
         logger.info("Avalogica X MCP session initialized successfully")
+        return session_id
+
+
+def ensure_consumer_needs_session() -> str:
+    """Ensure there is an active MCP session for the Avalogica Consumer Needs MCP server."""
+    global CONSUMER_NEEDS_SESSION_ID
+
+    with CONSUMER_NEEDS_SESSION_LOCK:
+        if CONSUMER_NEEDS_SESSION_ID:
+            return CONSUMER_NEEDS_SESSION_ID
+
+        headers = {
+            "Accept": "application/json, text/event-stream",
+            "Content-Type": "application/json",
+        }
+
+        init_payload = {
+            "jsonrpc": "2.0",
+            "id": "init-consumer-needs-1",
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {
+                    "name": "dedalus-bridge",
+                    "version": "1.0.0",
+                },
+            },
+        }
+
+        try:
+            resp = httpx.post(
+                f"{CONSUMER_NEEDS_MCP_URL}/mcp",
+                json=init_payload,
+                headers=headers,
+                timeout=30.0,
+            )
+            resp.raise_for_status()
+        except Exception as e:
+            logger.exception("Error initializing Avalogica Consumer Needs MCP session")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to initialize Avalogica Consumer Needs MCP session: {e}",
+            )
+
+        session_id = resp.headers.get("mcp-session-id")
+        if not session_id:
+            logger.error("Consumer Needs MCP initialize missing mcp-session-id header")
+            raise HTTPException(
+                status_code=500,
+                detail="Consumer Needs MCP initialize failed: missing mcp-session-id header",
+            )
+
+        CONSUMER_NEEDS_SESSION_ID = session_id
+        logger.info("Consumer Needs MCP session initialized successfully")
         return session_id
 
 
@@ -368,3 +426,103 @@ def call_x_mcp(mcp_payload: dict, user: AuthedUser) -> dict:
             detail=f"Avalogica X MCP error: {e}",
         )
 
+
+def call_consumer_needs_mcp(mcp_payload: dict) -> dict:
+    """
+    Calls the Avalogica Consumer Needs MCP server hosted on Cloud Run.
+
+    Ensures the MCP server is initialized (via ensure_consumer_needs_session) and then
+    sends a single JSON-RPC tools/call request in one HTTP POST, including the
+    Mcp-Session-Id header so the server recognizes the active session.
+    """
+    session_id = ensure_consumer_needs_session()
+
+    headers = {
+        "Accept": "application/json, text/event-stream",
+        "Content-Type": "application/json",
+        "Mcp-Session-Id": session_id,
+    }
+
+    try:
+        resp = httpx.post(
+            f"{CONSUMER_NEEDS_MCP_URL}/mcp",
+            json=mcp_payload,
+            headers=headers,
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+
+        content_type = resp.headers.get("content-type", "").lower()
+
+        if "text/event-stream" in content_type:
+            raw = resp.text
+            parsed = None
+            for line in raw.splitlines():
+                line = line.strip()
+                if line.startswith("data:"):
+                    json_str = line[len("data:"):].strip()
+                    if json_str:
+                        parsed = json.loads(json_str)
+            if parsed is None:
+                logger.error("Consumer Needs MCP SSE response did not contain any data: lines")
+                raise HTTPException(
+                    status_code=500,
+                    detail="Consumer Needs MCP error: invalid SSE payload (no data lines)",
+                )
+            data = parsed
+        else:
+            try:
+                data = resp.json()
+            except ValueError as e:
+                logger.exception("Failed to parse Consumer Needs MCP JSON response")
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Avalogica Consumer Needs MCP error: {e}",
+                )
+
+        if isinstance(data, dict):
+            if "error" in data:
+                logger.error("Consumer Needs MCP tools/call error: %s", data["error"])
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Consumer Needs MCP tools/call error: {data['error']}",
+                )
+            if "result" in data:
+                return data["result"]
+            return data
+
+        if isinstance(data, list):
+            target_id = mcp_payload.get("id")
+            if target_id is not None:
+                for item in data:
+                    if isinstance(item, dict) and item.get("id") == target_id:
+                        if "error" in item:
+                            logger.error("Consumer Needs MCP tools/call error: %s", item["error"])
+                            raise HTTPException(
+                                status_code=500,
+                                detail=f"Consumer Needs MCP tools/call error: {item['error']}",
+                            )
+                        if "result" in item:
+                            return item["result"]
+                        return item
+            last = data[-1]
+            if isinstance(last, dict) and "error" in last:
+                logger.error("Consumer Needs MCP tools/call error: %s", last["error"])
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Consumer Needs MCP tools/call error: {last['error']}",
+                )
+            if isinstance(last, dict) and "result" in last:
+                return last["result"]
+            return last
+
+        return data
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error while calling Avalogica Consumer Needs MCP")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Avalogica Consumer Needs MCP error: {e}",
+        )
