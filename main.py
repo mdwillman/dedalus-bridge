@@ -1,6 +1,7 @@
 import os
 import logging
 import time
+import json
 
 from models import (
     QueryRequest,
@@ -209,18 +210,27 @@ def build_mcp_search_emergent_signals_call(body: EmergentSignalsQuery) -> dict:
     Build a JSON-RPC tools/call payload for the search_emergent_signals tool
     exposed by the Avalogica Consumer Needs MCP server.
     """
-    return {
+    args: dict = {
+        "query": body.query,
+    }
+
+    # Only include numResults if the client actually provided it
+    if body.num_results is not None:
+        args["numResults"] = body.num_results
+
+    payload = {
         "jsonrpc": "2.0",
         "id": "1",
         "method": "tools/call",
         "params": {
             "name": "search_emergent_signals",
-            "arguments": {
-                "query": body.query,
-                "numResults": body.num_results,
-            },
+            "arguments": args,
         },
     }
+
+    logger = logging.getLogger(__name__)
+    logger.info("Calling Consumer Needs MCP with payload=%s", payload)
+    return payload
 
 
 def build_mcp_search_edge_communities_call(body: EdgeCommunitiesQuery) -> dict:
@@ -228,18 +238,26 @@ def build_mcp_search_edge_communities_call(body: EdgeCommunitiesQuery) -> dict:
     Build a JSON-RPC tools/call payload for the search_edge_communities tool
     exposed by the Avalogica Consumer Needs MCP server.
     """
-    return {
+    args: dict = {
+        "query": body.query,
+    }
+
+    if body.num_results is not None:
+        args["numResults"] = body.num_results
+
+    payload = {
         "jsonrpc": "2.0",
         "id": "1",
         "method": "tools/call",
         "params": {
             "name": "search_edge_communities",
-            "arguments": {
-                "query": body.query,
-                "numResults": body.num_results,
-            },
+            "arguments": args,
         },
     }
+
+    logger = logging.getLogger(__name__)
+    logger.info("Calling Consumer Needs MCP (edge communities) with payload=%s", payload)
+    return payload
 
 
 def build_mcp_find_similar_pages_call(body: SimilarPagesQuery) -> dict:
@@ -247,18 +265,26 @@ def build_mcp_find_similar_pages_call(body: SimilarPagesQuery) -> dict:
     Build a JSON-RPC tools/call payload for the find_similar_pages tool
     exposed by the Avalogica Consumer Needs MCP server.
     """
-    return {
+    args: dict = {
+        "url": body.url,
+    }
+
+    if body.num_results is not None:
+        args["numResults"] = body.num_results
+
+    payload = {
         "jsonrpc": "2.0",
         "id": "1",
         "method": "tools/call",
         "params": {
             "name": "find_similar_pages",
-            "arguments": {
-                "url": body.url,
-                "numResults": body.num_results,
-            },
+            "arguments": args,
         },
     }
+
+    logger = logging.getLogger(__name__)
+    logger.info("Calling Consumer Needs MCP (similar pages) with payload=%s", payload)
+    return payload
 
 
 def build_mcp_fetch_page_contents_call(body: FetchPageContentsQuery) -> dict:
@@ -266,18 +292,26 @@ def build_mcp_fetch_page_contents_call(body: FetchPageContentsQuery) -> dict:
     Build a JSON-RPC tools/call payload for the fetch_page_contents tool
     exposed by the Avalogica Consumer Needs MCP server.
     """
-    return {
+    args: dict = {
+        "url": body.url,
+    }
+
+    if body.include_subpages is not None:
+        args["includeSubpages"] = body.include_subpages
+
+    payload = {
         "jsonrpc": "2.0",
         "id": "1",
         "method": "tools/call",
         "params": {
             "name": "fetch_page_contents",
-            "arguments": {
-                "url": body.url,
-                "includeSubpages": body.include_subpages,
-            },
+            "arguments": args,
         },
     }
+
+    logger = logging.getLogger(__name__)
+    logger.info("Calling Consumer Needs MCP (fetch page) with payload=%s", payload)
+    return payload
 
 
 def build_mcp_start_link_x_account_call() -> dict:
