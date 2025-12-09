@@ -1,3 +1,4 @@
+from enum import Enum
 from typing import Optional, List
 from pydantic import BaseModel
 
@@ -26,10 +27,22 @@ class WeatherQuery(BaseModel):
 class TechUpdateQuery(BaseModel):
     topic: str  # e.g., "aiProductUpdates", "aiProducts", "newModels", "techResearch", "polEthicsAndSafety", "upcomingEvents"
 
+class ExaResultCategory(str, Enum):
+    company = "company"
+    research_paper = "research_paper"
+    news_article = "news_article"
+    pdf = "pdf"
+    github = "github"
+    tweet = "tweet"
+    personal_site = "personal_site"
+    linkedin_profile = "linkedin_profile"
+    financial_report = "financial_report"
+
 # Consumer Needs lane Pydantic models
 class EmergentSignalsQuery(BaseModel):
     query: str
     num_results: Optional[int] = None
+    result_category: Optional[ExaResultCategory] = None
 
 class EdgeCommunitiesQuery(BaseModel):
     query: str

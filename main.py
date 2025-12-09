@@ -214,9 +214,12 @@ def build_mcp_search_emergent_signals_call(body: EmergentSignalsQuery) -> dict:
         "query": body.query,
     }
 
-    # Only include numResults if the client actually provided it
     if body.num_results is not None:
         args["numResults"] = body.num_results
+
+    if body.result_category is not None:
+        # Enum -> string for JSON-RPC
+        args["resultCategory"] = body.result_category.value
 
     payload = {
         "jsonrpc": "2.0",
